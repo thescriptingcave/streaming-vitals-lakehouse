@@ -1,7 +1,7 @@
 # Data Flow Design
 
-Status: Draft v1
-Date: 2026-09-15
+Status: Draft v2
+Date: 2026-09-16
 Sequence diagrams for each end-to-end path. Mermaid `sequenceDiagram`.
 
 ## 1. Vitals Ingest — Firehose + L2 Transform Path
@@ -34,18 +34,32 @@ S3 `.failures/` prefix (Floci/PutRecordBackup). L2 idempotent on recordId.
 ```mermaid
 sequenceDiagram
     participant SIM as Vitals simulator
-    participant KIN as Kinesis
-    participant FLINK as Flink SQL job
-    participant ICE as Iceberg (serving tables)
-    participant DDB as DynamoDB latest_vitals
+    participant KIN as Kinesis (Floci)
+    participant FLINK as Flink SQL job (3 sinks)
+    participant ICE as Iceberg (Nessie) healthcare schema
+    participant TRINO as Trino
 
     SIM->>KIN: PutRecord(vitals JSON)
-    FLINK->>KIN: poll KDS consumer (ranged/EFO reader)
-    FLINK->>FLINK: watermark(ts), TUMBLE 1m agg
-    FLINK->>FLINK: alert rules (sustained HR>=120 30s)
-    FLINK-->>ICE: upsert vitals_agg_1m (exactly-once sink)
-    FLINK-->>DDB: latest_vitals refresh (per patient)
+    FLINK->>KIN: poll (FlinkKinesisConsumer, initpos TRIM_HORIZON)
+    FLINK->>FLINK: WATERMARK(event_time, 10s), read Kinesis
+    FLINK-->>ICE: vitals            (raw event rows + abnormal_flags[] + is_abnormal)
+    FLINK-->>ICE: vitals_1m         (TUMBLE 1m aggregates per patient)
+    FLINK-->>ICE: vitals_hop_1m     (HOP 30s/1m overlapping aggregates per patient)
+    TRINO->>ICE:  SELECT ... window / LAG / CTE (Superset + workshop)
+    TRINO-->>SUP: result set
 ```
+
+One job (`job.sql`), three streaming INSERTs — each lands as its own Flink job
+so TUMBLE/HOP/window dialects run side by side on the same stream. Sinks write
+Parquet via Iceberg and only publish **on checkpoints** (`IcebergFilesCommitter`):
+if the clusters tables stay empty, the checkpoint interval is missing
+(`execution.checkpointing.interval`; see FLINK_OPS.md).
+
+Read-time processing happens in the lake: window functions (LAG/LEAD, moving
+averages) and CTEs run over `vitals` in Trino — see `sql/workshop/`.
+
+Designed-but-not-wired: Firehose/L2 and the DynamoDB `latest_vitals` read-model
+refresh from this path (see DATA_MODEL §5/§8).
 
 ## 3. Alert Path — L1 Notifier (DynamoDB Streams → Lambda → SNS)
 
@@ -152,4 +166,7 @@ is atomic (write `.tmp` then rename-in-catalog).
 - Every hop logged with `trace_id` (producer-minted UUID propagated in
   payloads) for debugging replay.
 - Replay strategy: raw S3 payloads are the replay source — reprocessing a
-  window = re-read raw partition → recompute (see RELIABILITY.md).
+  window = re-read raw partition → recompute (see RELIABILITY.md). The Flink
+  source replays from the stream (initpos `TRIM_HORIZON`, 24 h Floci
+  retention); drop the Iceberg tables before resubmitting to avoid duplicate
+  window rows (see FLINK_OPS.md).

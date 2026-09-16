@@ -83,3 +83,25 @@ network. Mitigation: pin API id with `tags = { "floci:override-id" = "patients" 
 | API GW v2 → L3 | commit — `floci:override-id` + curl --resolve pattern in tests |
 | Scheduler → L4 | commit — daily cron; lock via DynamoDB ConditionalWrite |
 | Glue catalog → Trino | SPIKE in M1 — Nessie default until `UpdateTable` wire behavior proven |
+
+## Verified locally end-to-end (2026-09-16)
+
+Beyond the official-docs capability table above, this session exercised Floci
+as the backbone of the running stack:
+
+- **Standalone Flink → Iceberg (Nessie) → Trino**: one Flink 1.19 job
+  (`flink/sql/job.sql`) consumed the `vitals` Kinesis stream from Floci and
+  wrote **three** Iceberg tables (`vitals`, `vitals_1m` TUMBLE, `vitals_hop_1m`
+  HOP) into the Nessie catalog, with Iceberg's S3FileIO writing path-style to
+  Floci S3 and Trino reading the same tables.
+- **Kinesis replay**: TRIM_HORIZON re-read ~7 300 retained records after a
+  fresh job start (Floci's 24 h retention). Row signatures: `vitals` 7 324,
+  `vitals_1m` 32, `vitals_hop_1m` 60 (≈2× tumbling, as a HOP 30s/1m predicts).
+- **In-network addressing**: console/CLI on `127.0.0.1:4566`, in-network
+  consumers (Flink, Trino, Lambda) on `http://floci:4566` via `FLOCI_HOSTNAME`.
+- **Storage**: `hybrid` mode kept emulated state (stream data) across several
+  container restarts in the same session.
+- **Limits observed to respect**: emulated services are single-process
+  in-memory — resource exhaustion shows up as process death elsewhere in the
+  stack (e.g. Flink TM OOMs), and Glue's catalog gaps stand (Nessie remains
+  the dev catalog). See docs/FLINK_OPS.md + docs/FLOCI.md.

@@ -1,5 +1,9 @@
 -- Vitals Flink SQL pipeline (source of truth; copied into the JAR resources).
--- Mirrors DATA_FLOW.md §2: Kinesis -> TUMBLE 1m -> Iceberg (Nessie) sinks.
+-- Mirrors DATA_FLOW.md §2: Kinesis -> windows -> Iceberg (Nessie) sinks.
+-- Three streaming sinks teach the three windowing dialects side by side:
+--   1. vitals        : raw event-level rows (for LAG/LEAD, moving averages, CTEs)
+--   2. vitals_1m     : TUMBLE 1m  (non-overlapping fixed buckets -> one row/minute)
+--   3. vitals_hop_1m : HOP 30s/1m (overlapping sliding buckets -> N rows/minute)
 -- Managed Flink (Floci) injects ApplicationProperties; the Kinesis connector
 -- endpoint override comes from FLINK_AWS_ENDPOINT_URL via VitalsFlinkJob.
 --
@@ -59,6 +63,54 @@ USE CATALOG iceberg;
 CREATE DATABASE IF NOT EXISTS healthcare;
 USE healthcare;
 
+-- Raw event-level sink (source of truth for time-series SQL: deltas, deltas,
+-- moving averages and ranking run over this table). abnormal_flags / is_abnormal
+-- mirror producer.vitals.abnormal_flags() using the ABNORMAL_RULES thresholds.
+CREATE TABLE IF NOT EXISTS vitals (
+  patient_id      STRING,
+  device_id       STRING,
+  event_time      TIMESTAMP_LTZ(3),
+  ingestion_time  TIMESTAMP_LTZ(3),
+  heart_rate      DOUBLE,
+  systolic_bp     DOUBLE,
+  diastolic_bp    DOUBLE,
+  spo2            DOUBLE,
+  temperature     DOUBLE,
+  resp_rate       DOUBLE,
+  trace_id        STRING,
+  abnormal_flags  ARRAY<STRING>,
+  is_abnormal     BOOLEAN
+) WITH (
+  'write.format.default' = 'parquet',
+  'write.flush.max-rows' = '100',
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '20'
+);
+
+INSERT INTO vitals
+SELECT
+  patient_id,
+  device_id,
+  event_time,
+  ingestion_time,
+  heart_rate,
+  systolic_bp,
+  diastolic_bp,
+  spo2,
+  temperature,
+  resp_rate,
+  trace_id,
+  ARRAY_REMOVE(ARRAY_REMOVE(ARRAY_REMOVE(ARRAY_REMOVE(
+    ARRAY[
+      IF(heart_rate  >= 120, 'HR_HIGH',     ''),
+      IF(heart_rate  >= 180, 'CRITICAL_HR', ''),
+      IF(spo2        <  92,  'SPO2_LOW',    ''),
+      IF(systolic_bp >= 140, 'BP_HIGH',     '')
+    ],
+    ''), ''), ''), '') AS abnormal_flags,
+  (heart_rate >= 120 OR heart_rate >= 180 OR spo2 < 92 OR systolic_bp >= 140) AS is_abnormal
+FROM `default_catalog`.`default_database`.vitals_source;
+
 -- Tumbling 1-minute aggregates: dashboards + latest-vitals read model.
 -- M3 refinement: alert rules (HR/SpO2 thresholds) become a second sink.
 -- write.flush.max-rows keeps the streaming writer spilling files at modest
@@ -91,3 +143,33 @@ SELECT
   COUNT(*)            AS reading_count
 FROM `default_catalog`.`default_database`.vitals_source
 GROUP BY TUMBLE(event_time, INTERVAL '1' MINUTE), patient_id;
+
+-- Sliding (HOP) 1-minute windows, advanced every 30 s. Each reading falls into
+-- up to TWO adjacent windows -> more rows to inspect, overlapping per-minute
+-- coverage. Same 1m granularity as vitals_1m but "refreshes" every 30 s.
+CREATE TABLE IF NOT EXISTS vitals_hop_1m (
+  window_start    TIMESTAMP_LTZ(3),
+  window_end      TIMESTAMP_LTZ(3),
+  patient_id      STRING,
+  avg_heart_rate  DOUBLE,
+  max_heart_rate  DOUBLE,
+  min_spo2        DOUBLE,
+  reading_count   BIGINT
+) WITH (
+  'write.format.default' = 'parquet',
+  'write.flush.max-rows' = '100',
+  'write.metadata.delete-after-commit.enabled' = 'true',
+  'write.metadata.previous-versions-max' = '20'
+);
+
+INSERT INTO vitals_hop_1m
+SELECT
+  HOP_START(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE) AS window_start,
+  HOP_END(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE)   AS window_end,
+  patient_id,
+  AVG(heart_rate)  AS avg_heart_rate,
+  MAX(heart_rate)  AS max_heart_rate,
+  MIN(spo2)        AS min_spo2,
+  COUNT(*)         AS reading_count
+FROM `default_catalog`.`default_database`.vitals_source
+GROUP BY HOP(event_time, INTERVAL '30' SECOND, INTERVAL '1' MINUTE), patient_id;

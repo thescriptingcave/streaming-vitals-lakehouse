@@ -1,0 +1,72 @@
+# Local Flink override — how the dev cluster actually runs.
+#
+# The base docker-compose.yaml gates the standalone Flink services behind the
+# `flink-standalone` profile and publishes JM on host 8081. This override:
+#   * republishes ports that clash with local macOS guests (Docker Desktop's
+#     own proxy on 8081/8088, etc.),
+#   * injects the AWS env vars Flink tasks need to reach Floci,
+#   * moves the Hadoop shaded jar onto the Flink *lib* classpath (the CliFrontend
+#     wraps submitted jobs in a HadoopSecurityContext that needs
+#     org.apache.hadoop.conf.Configuration on the parent loader), and
+#   * pins TM resources that keep three concurrent SQL jobs alive on a laptop
+#     (see docs/FLINK_OPS.md for the failure modes each knob avoids).
+#
+# Usage:
+#   docker compose -f docker-compose.yaml -f docker/compose.flink.override.yml \
+#     up -d flink-jobmanager flink-taskmanager
+#   # start with the rest of the stack:
+#   docker compose -f docker-compose.yaml -f docker/compose.flink.override.yml up -d --wait
+#
+# NOTE: re-running `compose up` for one service can recreate other services it
+# diverged from (port re-maps etc.); expect e.g. Trino to bounce occasionally.
+
+services:
+  nessie:
+    # No host publish needed: only Trino reaches Nessie in-network.
+    ports: !override []
+
+  superset:
+    # Docker Desktop's own proxy holds host 8088; publish on 18088 instead.
+    ports: !override
+      - "127.0.0.1:18088:8088"
+
+  trino:
+    ports: !override
+      - "127.0.0.1:8083:8080"
+
+  flink-jobmanager:
+    # Docker Desktop's own proxy already holds host 8081/8088 etc.
+    ports: !override
+      - "127.0.0.1:18081:8081"
+    environment:
+      AWS_ACCESS_KEY_ID: "test"
+      AWS_SECRET_ACCESS_KEY: "test"
+      AWS_REGION: "us-east-1"
+    # Hadoop must sit on the lib (app) classpath: CliFrontend wraps jobs in
+    # HadoopSecurityContext, which needs org.apache.hadoop.conf.Configuration
+    # on the PARENT loader. Iceberg/AWS-SDK stay in the fat job JAR (child).
+    volumes:
+      - ./data/flink-libs/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar:/opt/flink/lib/flink-shaded-hadoop-2-uber.jar:ro
+
+  flink-taskmanager:
+    environment:
+      AWS_ACCESS_KEY_ID: "test"
+      AWS_SECRET_ACCESS_KEY: "test"
+      AWS_REGION: "us-east-1"
+      # Resource sizing that keeps THREE concurrent jobs (vitals, vitals_1m,
+      # vitals_hop_1m) running on a laptop-constrained Docker Desktop:
+      #   - 3 slots           : >= 1 slot per job at parallelism 1 (2 slots
+      #                         starved the third job -> NoResourceAvailable).
+      #   - metaspace 512m    : every job task re-loads the fat JAR's classes
+      #                         (Iceberg + AWS SDK); the JVM default 256m leaks
+      #                         across (re)submissions -> OutOfMemoryError:
+      #                         Metaspace kills the TM.
+      #   - 4 slots OOM-killed the TM (exit 137) under Rosetta emulation.
+      # NOTE: replaces the base FLINK_PROPERTIES block, so it must repeat
+      # jobmanager.rpc.address.
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 3
+        taskmanager.memory.jvm-metaspace.size: 512m
+    volumes:
+      - ./data/flink-libs/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar:/opt/flink/lib/flink-shaded-hadoop-2-uber.jar:ro

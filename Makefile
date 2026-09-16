@@ -52,6 +52,12 @@ load: ## Load Synthea FHIR cohort into Iceberg via Trino (patient_data loader)
 produce: ## Stream vitals from the simulator to Kinesis (Ctrl-C to stop)
 	$(PYTHON) -m producer.producer
 
+seed: ## Seed DDB read-model fixtures (L1/L3 + dashboards pre-Flink, idempotent)
+	$(PYTHON) scripts/seed_fixtures.py
+
+smoke: ## Post-deploy smoke (Kinesis, DDB, SNS, packaged Lambdas)
+	./scripts/smoke_deploy.sh
+
 # --- build ----------------------------------------------------------------
 build-lambdas: ## Zip L1-L4 Lambda packages into lambdas/_build/ (+ hashes)
 	$(PYTHON) scripts/build_lambdas.py
@@ -117,6 +123,13 @@ superset-setup: ## Provision Superset DB/datasets/charts/dashboards (REST API)
 # --- validation / diagnostics -----------------------------------------------
 validate: ## Run validation queries against Trino
 	docker exec -i trino trino < sql/00_validation.sql 2>/dev/null || echo "run: bring up compose first"
+
+workshop-run: ## Run the time-series SQL workshop (bootstrap + 01-07) on the live Trino (iceberg.healthcare)
+	@docker exec -i vitals-trino trino --catalog iceberg --schema healthcare < sql/workshop/00_bootstrap_patients.sql
+	@for q in sql/workshop/0[1-7]_*.sql; do \
+		printf '\n==== %s ====\n' "$$q"; \
+		docker exec -i vitals-trino trino --catalog iceberg --schema healthcare < "$$q"; \
+	done
 
 diag: ## Collect diagnostics into diagnostics/
 	./scripts/collect_diagnostics.sh

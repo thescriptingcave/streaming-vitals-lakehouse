@@ -30,7 +30,10 @@ public final class VitalsFlinkJob {
     public static void main(String[] args) throws Exception {
         EnvironmentSettings settings = EnvironmentSettings.inStreamingMode();
         TableEnvironment tableEnv = TableEnvironment.create(settings);
-        tableEnv.getConfig().getConfiguration().setString("table.exec.resource.default-parallelism", "2");
+        tableEnv.getConfig().getConfiguration().setString("table.exec.resource.default-parallelism", "1");
+        // Iceberg's FilesCommitter only publishes data on checkpoints; without an
+        // interval the sink holds files indefinitely (visible empty tables).
+        tableEnv.getConfig().getConfiguration().setString("execution.checkpointing.interval", "10000ms");
 
         String endpoint = System.getenv(ENDPOINT_ENV);
         if (endpoint != null && !endpoint.isBlank()) {

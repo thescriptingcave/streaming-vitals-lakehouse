@@ -8,7 +8,7 @@ Working with `naive-pdf-vitals`? The intended stack (docs/) is:
 
 - **Stream:** synthetic bedside vitals producer → Kinesis
 - **Batch:** Synthea (real patient cohort, FHIR) → Iceberg via Trino
-- **Reduce:** Flink SQL tumbling-window aggregates + alert rules
+- **Reduce:** Flink SQL — `vitals` event sink + `vitals_1m` (TUMBLE 1m) + `vitals_hop_1m` (HOP 30s/1m) (+ alert rules)
 - **Serve:** Trino (Iceberg, Nessie catalog) + read-model DynamoDB → Lambda API → Superset dashboards
 - **Operate:** EventBridge Scheduler → daily L4 maintenance/ML export (advisory lock)
 
@@ -24,10 +24,34 @@ make load        # FHIR -> Iceberg via Trino (patient_data loader)
 make seed        # DDB read-model fixtures so L1/L3 work pre-Flink
 make produce     # stream vitals to Kinesis (Ctrl-C to stop)
 make superset-setup  # provision Trino(Iceberg) DB in Superset (REST)
+make build-flink     # build the Flink JAR (host mvn)
+make workshop-run    # time-series SQL workshop over the live lake (docs/WORKSHOP.md)
 ```
 
-Then open https://localhost:8443 (Superset) and `trino --server http://127.0.0.1:8082`
-for `sql/demo_queries.sql`.
+Then open http://127.0.0.1:8088 (Superset) and `trino --server http://127.0.0.1:8082`
+for `sql/demo_queries.sql`. Both ports shift under the Flink override — see below.
+
+> Port note: on Docker Desktop, host ports 8081/8088 are often taken by the
+> desktop proxy. `docker/compose.flink.override.yml` republishes Superset on
+> **18088**, Trino on **8083**, and the Flink UI on **18081** — the values the
+> workshop and docs use.
+
+## Learn the stack
+
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — guided first-run walkthrough
+  (prereqs, ordering, expected results, common traps) if the cheatsheet above
+  isn't enough.
+- [docs/FLOCI.md](docs/FLOCI.md) — how the Floci emulator works and how to
+  build against it (endpoints, storage modes, per-service behaviour).
+- [docs/WORKSHOP.md](docs/WORKSHOP.md) + `sql/workshop/` — runnable time-series
+  SQL tour (LAG/LEAD, moving averages, running totals, ranking, CTEs,
+  TUMBLE-vs-HOP) against the live lake.
+- [docs/FLINK_OPS.md](docs/FLINK_OPS.md) — build/deploy/tune the 3-sink Flink
+  job and the failure modes each knob fixes.
+- Complementary design docs: [DATA_FLOW.md](docs/DATA_FLOW.md),
+  [DATA_MODEL.md](docs/DATA_MODEL.md), [ARCHITECTURE.md](docs/ARCHITECTURE.md),
+  [INFRASTRUCTURE.md](docs/INFRASTRUCTURE.md),
+  [FOCI_VERIFICATION.md](docs/FOCI_VERIFICATION.md).
 
 ## Catalog note
 
@@ -43,11 +67,11 @@ lambdas/  L1 alert SNS · L2 firehose transform · L3 patients API · L4 mainten
 producer/  vitals generator + Kinesis streamer
 patient_data/ Synthea FHIR mapper + Trino loader
 ml/        patient-based train/val/test split + manifest writer
-flink/     Maven SQL job (VitalsFlinkJob + flink/sql/job.sql)
+flink/     Maven SQL job (VitalsFlinkJob + flink/sql/job.sql) — vitals, vitals_1m, vitals_hop_1m sinks
 infra/     Terraform/OpenToFu -> Floci (9 modules)
-docker/    compose + trino bootstrap + vendored Superset dialect patch
+docker/    compose + trino bootstrap + Flink override + vendored Superset dialect patch
 scripts/   build_lambdas, cohort, smoke/deploy, superset provision, seed, diagnostics
-sql/       Trino demo + validation queries
+sql/       demo + validation + workshop queries (sql/workshop/*)
 tests/     unit (no infra) · integration (Floci) · e2e smoke · fixtures
 ```
 
