@@ -4,13 +4,13 @@ Real-time vitals streaming + synthetic patient data lakehouse.
 Kinesis → Flink SQL → Iceberg → Trino → Superset, all against **[Floci](https://floci.io/floci)**
 (a free, tokenless AWS emulator on Docker), provisioned with **Terraform/OpenToFu**.
 
-Working with `naive-pdf-vitals`? The intended stack (docs/) is:
+The stack (docs/):
 
-- **Stream:** synthetic bedside vitals producer → Kinesis
-- **Batch:** Synthea (real patient cohort, FHIR) → Iceberg via Trino
-- **Reduce:** Flink SQL — `vitals` event sink + `vitals_1m` (TUMBLE 1m) + `vitals_hop_1m` (HOP 30s/1m) (+ alert rules)
-- **Serve:** Trino (Iceberg, Nessie catalog) + read-model DynamoDB → Lambda API → Superset dashboards
-- **Operate:** EventBridge Scheduler → daily L4 maintenance/ML export (advisory lock)
+- **Stream:** synthetic bedside vitals producer → Kinesis — **proven**
+- **Reduce:** Flink SQL — `vitals` event sink + `vitals_1m` (TUMBLE 1m) + `vitals_hop_1m` (HOP 30s/1m) → Iceberg — **proven**
+- **Serve:** Trino (Iceberg, Nessie catalog) + DynamoDB read-model → Lambda API → Superset dashboards — serving proven; the DDB read-model is designed but not wired to Flink
+- **Batch (designed, not yet exercised):** Synthea (real patient cohort, FHIR) → Iceberg via Trino
+- **Operate (designed, not yet exercised):** EventBridge Scheduler → daily L4 maintenance/ML export
 
 ## Quickstart
 
@@ -19,13 +19,17 @@ make setup       # .env + uv sync (Python 3.12)
 make up          # Floci + Trino + Superset + MySQL + Nessie
 make tf-apply    # buckets, streams, Firehose, DynamoDB, Lambdas, API GW, scheduler
 make tf-plan     # (review before apply)
-make synth       # Synthea cohort (Java) -> synthea-output/fhir
-make load        # FHIR -> Iceberg via Trino (patient_data loader)
 make seed        # DDB read-model fixtures so L1/L3 work pre-Flink
-make produce     # stream vitals to Kinesis (Ctrl-C to stop)
+make produce     # stream vitals to Kinesis (Ctrl-C to stop, or run in a 2nd shell)
 make superset-setup  # provision Trino(Iceberg) DB in Superset (REST)
-make build-flink     # build the Flink JAR (host mvn)
+# Flink 3-sink job (details + troubleshooting: docs/FLINK_OPS.md, docs/GETTING_STARTED.md §5)
+docker compose -f docker-compose.yaml -f docker/compose.flink.override.yml \
+  up -d flink-jobmanager flink-taskmanager
+make build-flink     # build the Flink JAR (host mvn; dockerized fallback in docs/FLINK_OPS.md)
+docker cp flink/target/vitals-flink-job-1.0.0-SNAPSHOT.jar vitals-flink-jm:/opt/vitals-flink-job.jar
+docker exec vitals-flink-jm flink run -d -c com.healthcare.vitals.VitalsFlinkJob /opt/vitals-flink-job.jar
 make workshop-run    # time-series SQL workshop over the live lake (docs/WORKSHOP.md)
+# Optional batch arm (designed, not yet exercised): make synth && make load
 ```
 
 Then open http://127.0.0.1:8088 (Superset) and `trino --server http://127.0.0.1:8082`
@@ -79,5 +83,7 @@ tests/     unit (no infra) · integration (Floci) · e2e smoke · fixtures
 
 ## CI
 
-GitLab pipeline (`lint → unit → integration(Floci) → build → deploy`) in
-`.gitlab-ci.yml` — ephemeral Floci, pinned images, no secrets.
+A GitLab pipeline (`lint → unit → integration(Floci) → build → deploy`) is
+scaffolded in `.gitlab-ci.yml` — ephemeral Floci, pinned images, no secrets —
+but has **not been run in GitLab**. Local equivalents: `make lint/typecheck`,
+`make test-unit`, `make test-floci/integration/e2e`.
