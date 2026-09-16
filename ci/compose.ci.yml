@@ -1,0 +1,63 @@
+# CI compose - Floci-backed integration environment (docker-compose style).
+# Used by the GitLab `integration` and `deploy` stages and local test-integration.
+#
+# Differences vs local docker-compose.yaml:
+#   - FLOCI_STORAGE_MODE=memory (ephemeral per-run)
+#   - No Superset UI (headless asserts via Trino REST + AWS SDK)
+#   - No mysql/superset volumes; fewer moving parts, faster --wait
+#   - Trino + Nessie for the Iceberg catalog (Glue path is an M1 spike)
+
+services:
+  floci:
+    image: floci/floci:2.1.0
+    container_name: ci-floci
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      FLOCI_HOSTNAME: floci
+      FLOCI_STORAGE_MODE: memory
+      FLOCI_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      FLOCI_SERVICES_UI_ENABLED: "false"
+      # Record-at-a-time Firehose flush so integration asserts don't wait 300s.
+      FLOCI_SERVICES_FIREHOSE_FLUSH_RECORD_COUNT: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ': > /dev/tcp/127.0.0.1/4566' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.91.1
+    container_name: ci-nessie
+    environment:
+      QUARKUS_HTTP_PORT: 19120
+
+  trino:
+    image: trinodb/trino:468
+    container_name: ci-trino
+    depends_on:
+      floci:
+        condition: service_started
+    environment:
+      ICEBERG_CATALOG: ${ICEBERG_CATALOG:-nessie}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      FLOCI_ENDPOINT: http://floci:4566
+      NESSIE_URI: http://nessie:19120/api/v2
+      WAREHOUSE: s3://healthcare-lake/iceberg/warehouse/
+    volumes:
+      - ../trino/catalog-templates:/etc/trino/templates:ro
+      - ../docker/trino-bootstrap.sh:/etc/trino/bootstrap.sh:ro
+    entrypoint: ["/bin/bash", "/etc/trino/bootstrap.sh"]
+    command: ["server"]
+    ports:
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s

@@ -1,0 +1,107 @@
+[project]
+name = "healthcare-realtime-vitals-lakehouse"
+version = "0.1.0"
+description = "Real-time vitals streaming + synthetic patient data lakehouse (Kinesis -> Flink SQL -> Iceberg -> Trino -> Superset)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+# NOTE: dependency versions below are LOWER BOUNDS. The uv.lock file is the
+# source of truth and MUST be committed + kept in sync (uv lock --check in CI).
+# Unpinned/loose installs on fresh clones silently break pinned Docker patches
+# (see superset/requirements-local.txt, docker/patches).
+dependencies = [
+    "boto3>=1.38.0",
+    "requests>=2.32.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "pytest-xdist>=3.6.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.9.0",
+    "mypy>=1.10.0",
+    "types-requests>=2.32.0",
+    "testcontainers-floci==0.1.1",
+    "trino==0.339.0",
+    "sqlalchemy-trino==0.5.0",
+    "pyyaml>=6.0.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["lambdas", "patient_data", "producer", "ml"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    "lambdas/_build/",
+    "flink/target/",
+    "data/",
+    "synthea-output/",
+    "superset_home/",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+]
+ignore = [
+    "TCH001",  # runtime deps accessible via boto3/stdlib in Lambda base images
+]
+
+[tool.ruff.lint.per-file-ignores]
+# N818: test fakes reuse botocore's exact exception names to exercise except clauses.
+"tests/**/*.py" = ["N818"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["lambdas", "patient_data", "producer", "ml"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+# Application code is fully annotated; test functions intentionally light.
+disallow_untyped_defs = false
+check_untyped_defs = true
+disallow_any_generics = true
+exclude = [
+    "lambdas/_build/",
+    "flink/target/",
+    "data/",       # Floci/Synthea/Superset generated state
+    "synthea-output/",
+    "superset_home/",
+]
+
+[[tool.mypy.overrides]]
+module = [
+    "boto3.*",
+    "botocore.*",
+    "trino.*",
+    "floci.*",
+]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (no external dependencies)",
+    "floci: Integration tests that require a Floci container",
+    "e2e: End-to-end pipeline smoke tests (serial, compose up)",
+    "slow: Slow tests excluded from default runs",
+]
+addopts = "-m 'not e2e'"
+junit_family = "xunit2"

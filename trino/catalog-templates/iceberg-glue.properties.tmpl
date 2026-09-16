@@ -1,0 +1,15 @@
+# SPIKE TEMPLATE - Floci Glue Data Catalog as the Iceberg catalog.
+# docs/FOCI_VERIFICATION.md: Floci Glue currently lacks UpdateTable /
+# GetPartition / BatchCreatePartition, so Iceberg commits via Trino may not
+# persist. Probe in M1 before relying on this path.
+connector.name=iceberg
+iceberg.catalog.type=glue
+iceberg.glue.catalogid=000000000000
+
+# Native S3 settings - Floci endpoint (path-style)
+fs.native-s3.enabled=true
+s3.endpoint=${FLOCI_ENDPOINT}
+s3.aws-access-key=${AWS_ACCESS_KEY_ID}
+s3.aws-secret-key=${AWS_SECRET_ACCESS_KEY}
+s3.path-style-access=true
+s3.region=${AWS_REGION}

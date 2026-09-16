@@ -1,0 +1,45 @@
+# --- Environment & Secrets ---
+.env
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# --- Terraform / OpenToFu ---
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.cache/
+infra/.terraform.lock.hcl.tmp
+
+# --- Local data & state (Floci storage, Synthea output, Superset) ---
+data/
+floci-data/
+synthea-output/
+superset_home/
+mysql_data/
+
+# --- Build artifacts ---
+lambdas/_build/
+flink/target/
+# generated copy of flink/sql/job.sql packed into the job JAR
+flink/src/main/resources/job.sql
+dist/
+
+# --- System & IDE ---
+.DS_Store
+.vscode/
+.idea/
+
+# --- Logs ---
+*.log
+diagnostics/
+
+# --- SQL/notebook scratch ---
+*.tmp

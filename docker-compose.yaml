@@ -1,0 +1,182 @@
+# Healthcare Realtime Vitals Lakehouse - local development stack.
+# Emulated AWS (Floci) + Synthea + Trino + Superset (+ Nessie fallback catalog).
+#
+#   docker compose up -d --wait
+#   docker compose ps
+#
+# Env is read from .env (see .env.example).
+
+services:
+  # ---- Emulated AWS (Floci) -------------------------------------------------
+  # Every AWS service at http://localhost:4566. Real Docker for Lambda,
+  # Managed Flink, etc. Requires access to the host Docker socket.
+  floci:
+    image: floci/floci:2.1.0
+    container_name: vitals-floci
+    ports:
+      - "4566:4566"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/floci:/app/data
+    environment:
+      # Inside-container services (Lambda sidecars, Flink) reach us by DNS.
+      FLOCI_HOSTNAME: floci
+      FLOCI_STORAGE_MODE: ${FLOCI_STORAGE_MODE:-hybrid}
+      FLOCI_STORAGE_PERSISTENT_PATH: /app/data
+      FLOCI_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      # Lean local runs: no web console sidecar (floci/floci-ui). Enable if wanted.
+      FLOCI_SERVICES_UI_ENABLED: "false"
+      # Fast Firehose flushing for demos/tests; 1 == record-at-a-time.
+      FLOCI_SERVICES_FIREHOSE_FLUSH_RECORD_COUNT: "0"
+    networks:
+      - vitals-network
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ': > /dev/tcp/127.0.0.1/4566' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # ---- Nessie (fallback Iceberg catalog; default dev catalog) ---------------
+  nessie:
+    image: ghcr.io/projectnessie/nessie:0.91.1
+    container_name: vitals-nessie
+    environment:
+      QUARKUS_HTTP_PORT: 19120
+    ports:
+      - "127.0.0.1:19120:19120"
+    networks:
+      - vitals-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:19120/api/v1/config"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---- Trino (Iceberg via Nessie or Floci-Glue) ------------------------------
+  trino:
+    image: trinodb/trino:468
+    container_name: vitals-trino
+    depends_on:
+      floci:
+        condition: service_started
+      nessie:
+        condition: service_healthy
+    environment:
+      ICEBERG_CATALOG: ${ICEBERG_CATALOG:-nessie}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-test}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-test}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      FLOCI_ENDPOINT: http://floci:4566
+      NESSIE_URI: http://nessie:19120/api/v2
+      WAREHOUSE: s3://healthcare-lake/iceberg/warehouse/
+    volumes:
+      - ./trino/catalog-templates:/etc/trino/templates:ro
+      - ./docker/trino-bootstrap.sh:/etc/trino/bootstrap.sh:ro
+    entrypoint: ["/bin/bash", "/etc/trino/bootstrap.sh"]
+    command: ["server"]
+    ports:
+      - "127.0.0.1:8082:8080"
+    networks:
+      - vitals-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+    restart: unless-stopped
+
+  # ---- MySQL (Superset metadata) ----------------------------------------------
+  mysql:
+    image: mysql:8.0
+    container_name: vitals-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-healthcare}
+    volumes:
+      - ./mysql_data:/var/lib/mysql
+    networks:
+      - vitals-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-rootpassword}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  # ---- Superset (dashboards over Trino) ---------------------------------------
+  superset:
+    image: apache/superset:3.1.0
+    container_name: vitals-superset
+    depends_on:
+      trino:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8088:8088"
+    networks:
+      - vitals-network
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:-healthcare_2026_secret}
+      SUPERSET_WEBSERVER_PORT: 8088
+      SUPERSET_WEBSERVER_TIMEOUT: 300
+      SUPERSET_ADMIN_USERNAME: ${SUPERSET_ADMIN_USERNAME:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+      SUPERSET_ADMIN_FIRSTNAME: ${SUPERSET_ADMIN_FIRSTNAME:-Admin}
+      SUPERSET_ADMIN_LASTNAME: ${SUPERSET_ADMIN_LASTNAME:-User}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@superset.local}
+      # Trino is read-only from SQL Lab unless intentionally enabled elsewhere.
+      # The 0.339.0 dialect fix is applied in the bootstrap (docker/patches).
+    volumes:
+      - ./superset_home:/app/superset_home
+      - ./superset/requirements-local.txt:/app/requirements-local.txt
+      - ./superset/docker-bootstrap.sh:/app/superset-bootstrap.sh:ro
+      - ./docker/patches:/app/patches:ro
+    entrypoint: ["/bin/bash", "/app/superset-bootstrap.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 15
+      start_period: 90s
+    restart: unless-stopped
+
+  # ---- Standalone Flink (dev alternative to Floci Managed Flink) --------------
+  # Enable with: docker compose --profile flink-standalone up -d
+  # Floci's Managed Flink (kinesisanalyticsv2) is the primary M2 path; this
+  # gives a plain JobManager/TaskManager to iterate on Flink SQL quickly.
+  flink-jobmanager:
+    image: apache/flink:1.19
+    container_name: vitals-flink-jm
+    profiles: ["flink-standalone"]
+    command: jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+    ports:
+      - "127.0.0.1:8081:8081"
+    networks:
+      - vitals-network
+
+  flink-taskmanager:
+    image: apache/flink:1.19
+    container_name: vitals-flink-tm
+    profiles: ["flink-standalone"]
+    command: taskmanager
+    depends_on:
+      - flink-jobmanager
+    environment:
+      - |
+        FLINK_PROPERTIES=
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 4
+    networks:
+      - vitals-network
+
+networks:
+  vitals-network:
+    driver: bridge

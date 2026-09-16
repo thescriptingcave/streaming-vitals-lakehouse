@@ -1,0 +1,230 @@
+# Healthcare Realtime Vitals Lakehouse — GitLab CI
+# Stages: lint -> unit -> integration -> build -> deploy
+# All emulation is Floci (free, tokenless) — no secrets required.
+# See docs/CI_CD.md and docs/FOCI_VERIFICATION.md.
+
+stages:
+  - lint
+  - unit
+  - integration
+  - build
+  - deploy
+
+variables:
+  PY_VERSION_SLIM: "python:3.12-slim"
+  DOCKER_VERSION: "docker:24.0.9"
+  TOFU_VERSION: "1.9.0"
+  TF_ROOT: "infra"
+  AWS_ENDPOINT_URL: "http://localhost:4566"
+  AWS_ACCESS_KEY_ID: "test"
+  AWS_SECRET_ACCESS_KEY: "test"
+  AWS_REGION: "us-east-1"
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+.uv-python: &uv-python
+  image: python:3.12-slim
+  before_script:
+    - pip install --user --no-cache-dir uv==0.8.2
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv sync --extra dev --frozen
+  cache:
+    key:
+      files:
+        - uv.lock
+    paths:
+      - .venv/
+    policy: pull-push
+
+.compose-ci: &compose-ci
+  image: docker:24.0.9
+  services:
+    - docker:24.0.9-dind
+  variables:
+    DOCKER_HOST: "tcp://docker:2375"
+    DOCKER_TLS_CERTDIR: ""
+    DOCKER_DRIVER: overlay2
+  before_script:
+    - apk add --no-cache python3 py3-pip curl unzip
+    - pip install --user --no-cache-dir uv==0.8.2 awscli
+    - export PATH="$HOME/.local/bin:$PATH"
+    - export AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test AWS_REGION=us-east-1
+    - uv sync --extra dev --frozen
+    - docker compose version
+
+# ---------------------------------------------------------------------------
+# LINT
+# ---------------------------------------------------------------------------
+lint-python:
+  <<: *uv-python
+  stage: lint
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run mypy .
+  artifacts:
+    reports:
+      junit: []
+
+lint-secrets:
+  stage: lint
+  image: alpine:3.20
+  # .env.example intentionally carries dummy placeholders (password=admin etc).
+  before_script:
+    - apk add --no-cache ripgrep
+  script:
+    - |
+      if rg -n --hidden -g '!.git' -g '!uv.lock' -g '!*.md' -g '!.env.example' \
+           '(AKIA[0-9A-Z]{16}|BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|password\s*[=:]\s*[^$]|secret\s*[=:]\s*[^$])' .; then
+        echo "Banned secret-like pattern found" >&2; exit 1
+      fi
+      echo "no banned patterns"
+
+lint-terraform:
+  stage: lint
+  image: hashicorp/terraform:1.14.0
+  before_script:
+    - terraform -chdir=$TF_ROOT init -backend=false -input=false
+  script:
+    - terraform fmt -check -recursive $TF_ROOT
+    - terraform -chdir=$TF_ROOT validate
+  cache:
+    paths:
+      - .terraform/plugins/
+
+# ---------------------------------------------------------------------------
+# UNIT (no infra)
+# ---------------------------------------------------------------------------
+unit-producer:
+  <<: *uv-python
+  stage: unit
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/unit/test_vitals.py tests/unit/test_mapper.py tests/unit/test_producer.py tests/unit/test_loader.py tests/unit/test_split.py -m unit -q --cov=producer --cov=patient_data --cov=ml --cov-fail-under=80 --junitxml=report-unit.xml -n auto
+  artifacts:
+    when: always
+    reports:
+      junit: report-unit.xml
+
+unit-lambdas:
+  <<: *uv-python
+  stage: unit
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/unit/test_l1.py tests/unit/test_l2.py tests/unit/test_l3.py tests/unit/test_l4.py -m unit -q --cov=lambda --cov-fail-under=80 --junitxml=report-lambdas.xml -n auto
+  artifacts:
+    when: always
+    reports:
+      junit: report-lambdas.xml
+
+# ---------------------------------------------------------------------------
+# INTEGRATION (Floci compose, memory storage)
+# ---------------------------------------------------------------------------
+.it-base: &it-base
+  <<: *compose-ci
+  stage: integration
+  before_script:
+    - *compose-ci
+    - export AWS_ENDPOINT_URL=http://docker:4566
+    - docker compose -f ci/compose.ci.yml up -d --wait
+  after_script:
+    - docker compose -f ci/compose.ci.yml down -v --remove-orphans
+
+it-stream:
+  <<: *it-base
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/integration -m floci -x -q -k "it_kinesis or it_firehose or it_trino_iceberg or it_window" --junitxml=report-it-stream.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-it-stream.xml
+
+it-alert:
+  <<: *it-base
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/integration -m floci -x -q -k "it_alerts" --junitxml=report-it-alert.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-it-alert.xml
+
+it-api:
+  <<: *it-base
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/integration -m floci -x -q -k "it_api" --junitxml=report-it-api.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-it-api.xml
+
+it-maintenance:
+  <<: *it-base
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run pytest tests/integration -m floci -x -q -k "it_maintenance" --junitxml=report-it-maint.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-it-maint.xml
+
+# ---------------------------------------------------------------------------
+# BUILD
+# ---------------------------------------------------------------------------
+build-lambdas:
+  <<: *uv-python
+  stage: build
+  needs: ["unit-lambdas"]
+  script:
+    - export PATH="$HOME/.local/bin:$PATH"
+    - uv run scripts/build_lambdas.py
+    - sha256sum lambdas/_build/*.zip > lambdas/_build/SHA256SUMS
+  artifacts:
+    paths:
+      - lambdas/_build/
+    expires_in: 30 days
+
+build-flink:
+  stage: build
+  image: maven:3.9.9-eclipse-temurin-17
+  needs: ["unit-producer"]
+  script:
+    - mvn -f flink/pom.xml -B -q package
+  artifacts:
+    paths:
+      - flink/target/vitals-flink-job-*.jar
+    expires_in: 30 days
+
+# ---------------------------------------------------------------------------
+# DEPLOY (simulated — apply infra to a fresh Floci, then smoke)
+# ---------------------------------------------------------------------------
+deploy-tofu:
+  <<: *compose-ci
+  stage: deploy
+  needs: ["build-lambdas", "build-flink"]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  before_script:
+    - *compose-ci
+    - export AWS_ENDPOINT_URL=http://docker:4566
+    - docker compose -f ci/compose.ci.yml up -d --wait
+    - curl -sfL -o /tmp/tofu.zip "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip"
+    - unzip -o /tmp/tofu.zip -d /usr/local/bin >/dev/null
+    - tofu version
+  script:
+    - export TF_VAR_floci_endpoint=http://docker:4566
+    - tofu -chdir=infra init -backend=false -input=false
+    - tofu -chdir=infra apply -auto-approve
+    - export AWS_ENDPOINT_URL=http://docker:4566
+    - ./scripts/smoke_deploy.sh
+  after_script:
+    - docker compose -f ci/compose.ci.yml down -v --remove-orphans
+  artifacts:
+    when: always
+    paths:
+      - diagnostics/
