@@ -15,16 +15,16 @@ historical queries are served through Trino with full SQL power (time-series
 functions, window functions, CTEs). Dashboards run on Superset; ML-ready data
 is exported as Parquet from the lake.
 
-The stack is validated end-to-end in GitLab CI with Floci (free, MIT
-open-source AWS emulator) simulating AWS services (Kinesis, S3, Managed
-Flink), so tests run against the same API surface as production AWS without
-any cloud spend.
+The stack is validated end-to-end against Floci (free, MIT open-source AWS
+emulator) simulating AWS services (Kinesis, S3, Managed Flink), so tests run
+against the same API surface as production AWS without any cloud spend.
 
 ### Key differentiators vs. previous project
 - Streaming ingest (Kinesis via Floci) instead of batch JSON producers.
 - Two data layers: batch synthetic patient records + real-time vitals stream,
   joinable (vitals reference patient_id).
-- CI/CD with GitLab (previous project had no CI).
+- CI: this project adds one (previously had none) — local `make` gates with
+  Floci-backed integration tests (see README "CI" section).
 - AWS service simulation with Floci in CI (free, no auth token — unlike
   token-gated LocalStack).
 - Deliberate ML-readiness: enough data + clean Parquet exports for training.
@@ -43,7 +43,7 @@ any cloud spend.
    to Parquet.
 6. Streaming alerting rules (e.g. HR > 120 sustained for 30 s) keyed to real
    patients.
-7. Full CI/CD via GitLab with Floci-backed integration tests.
+7. Reproducible CI-style validation with Floci-backed integration tests.
 8. Reuse of existing skills: Trino SQL, Superset, Iceberg/Nessie, Python.
 9. A structured **Lambda learning path**: four real integrations covering the
    core AWS serverless patterns, exercised end-to-end on Floci.
@@ -150,8 +150,8 @@ Learning objectives per pattern (interview-facing):
 - L4: `schedule`, idempotent execution, env config, cold-start awareness.
 
 Deployment: Terraform/OpenToFu modules in `infra/`, applied against Floci
-(`AWS_ENDPOINT_URL=http://localhost:4566`, openToFu compat verified by Floci
-suite). Deployed in GitLab CI `deploy` stage.
+(`AWS_ENDPOINT_URL=http://localhost:4566`, OpenToFu compat verified by Floci
+suite). Applied locally via `make tf-apply`; `make smoke` post-apply.
 
 ## 6. Stack Decision
 
@@ -184,8 +184,8 @@ and weakening ML-lake story.
 ## 7. Floci (AWS Emulation) Usage
 
 - **Floci** (free, MIT, drop-in LocalStack replacement) in `docker compose`
-  and GitLab CI. Port 4566, no auth token. Storage modes: `memory` (CI),
-  `hybrid`/`persistent` (local dev).
+  and the integration environment. Port 4566, no auth token. Storage modes:
+  `memory` (CI), `hybrid`/`persistent` (local dev).
   - S3 — Iceberg warehouse storage (Trino `connector.properties` pointed at
     `s3://...` with Floci endpoint).
   - Kinesis — streams, shards, enhanced fan-out (verified supported).
@@ -202,26 +202,29 @@ and weakening ML-lake story.
 - Swap endpoint config to go real-AWS without code change (actual AWS prod
   deploy is out of scope for v1).
 
-## 8. GitLab CI/CD Design
+## 8. CI/CD Status (local gates)
 
-`.gitlab-ci.yml` stages (docker-compose based):
+A GitLab pipeline (`.gitlab-ci.yml`) was designed but never used and has been
+**removed along with `docs/CI_CD.md`**. No CI host is in use; validation is
+gated locally (see README "CI" section):
 
 ```
 lint → test (unit) → integration (Floci) → build → deploy(simulated)
 ```
 
-- **lint**: ruff + mypy (as existing project).
-- **unit**: producer/business logic, no infra (`pytest`).
-- **integration**: spin up `docker-compose.ci.yml` — Floci (services
-  `s3`, `kinesis`, `lambda`, `dynamodb`, `sns`, `apigateway`,
-  `events`), Trino, Nessie, Superset, Flink — push fixtures through
-  the whole pipeline, assert rows/alerts arrive. Use `testcontainers-floci`
-  (PyPI) for isolated per-test Floci instances.
-- **build**: build producer/Flink images + zip Lambda packages (GitLab
-  Container Registry / job artifacts).
-- **deploy**: `terraform apply`/`tofu apply` of `infra/` against Floci
-  (Lambda L1–L4 provisioning); then `docker compose up` smoke test
-  (or simulated ECS via `aws ecs` on Floci) — TBD milestone.
+- **lint**: ruff + mypy (`make lint`, `make typecheck`).
+- **unit**: producer/business logic, no infra (`make test-unit`).
+- **integration**: `ci/compose.ci.yml` — Floci (services `s3`, `kinesis`,
+  `lambda`, `dynamodb`, `sns`, `apigateway`, `events`), Trino, Nessie,
+  Superset, Flink — push fixtures through the whole pipeline, assert
+  rows/alerts arrive (`make test-floci`, `make test-integration`). Use
+  `testcontainers-floci` (PyPI) for isolated per-test Floci instances.
+- **build**: `make build-lambdas` (zip L1–L4) + `make build-flink` (job JAR).
+- **deploy**: `make tf-apply` of `infra/` against Floci (Lambda L1–L4
+  provisioning), then `make smoke`.
+- Adding a CI host later (GitHub Actions fits the current remote) = port the
+  pipeline file; the integration environment (`ci/compose.ci.yml`) is already
+  host-agnostic.
 
 ## 9. Repository Topology (proposed)
 
@@ -236,7 +239,7 @@ healthcare-realtime-vitals-lakehouse/
   trino/              # catalog + connector config
   superset/           # bootstrap + chart/dashboard provisioning
   tests/              # unit + integration
-  ci/                 # compose files for GitLab CI
+  ci/                 # integration compose (CI-ready, host-agnostic)
   ml/                 # Parquet export + validation split script
   Makefile
 ```
@@ -246,12 +249,12 @@ healthcare-realtime-vitals-lakehouse/
 - **M0 — Scoping + stack sign-off** (this doc; pick final stack).
 - **M1 — Patient layer + local raw pipeline**: Floci up; patient cohort
   generated into Iceberg; producer → Kinesis → raw vitals Iceberg table;
-  single Trino SELECT joining both. GitLab CI: lint + unit.
+  single Trino SELECT joining both. CI: lint + unit run locally.
 - **M2 — Flink streaming**: windowed aggs + alert rules → serving/alerts
-  tables. GitLab CI integration stage passes on Floci.
+  tables. Integration stage (`make test-floci`) passes on Floci.
 - **M3 — Lambda L1+L2**: alert-notifier (DDB Streams → Lambda → SNS) and
   Firehose transform (normalize vitals → S3/Iceberg); Terraform infra in
-  `infra/`, deployed in CI deploy stage.
+  `infra/`, applied via `make tf-apply` + `make smoke`.
 - **M4 — Lambda L3+L4**: Patients REST API (API GW → Lambda → DDB) and
   scheduled Iceberg job (compaction + Parquet ML export).
 - **M5 — Query + dashboards**: wire Trino → Superset; time-series, window

@@ -49,9 +49,9 @@ Policy boundaries: all statements scoped to ARN-prefixed resources
   `boto3.client("secretsmanager")`; Lambda env vars only for non-secret
   config (table names, topic ARNs).
 - Trino/Superset passwords: default dev creds documented; overridable via env.
-- GitLab CI: no production secrets required (Floci free). If real-AWS creds
-  are added later → GitLab `CI/CD → Variables` masked + protected, never in
-  `.gitlab-ci.yml`.
+- GitLab CI designs were removed; no CI host is in use (local `make` gates).
+  If a CI system is added later: masked+protected secret variables, never in
+  pipeline files. Floci needs no secrets anyway.
 
 ## 4. Data Handling
 

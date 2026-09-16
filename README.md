@@ -83,7 +83,9 @@ tests/     unit (no infra) · integration (Floci) · e2e smoke · fixtures
 
 ## CI
 
-A GitLab pipeline (`lint → unit → integration(Floci) → build → deploy`) is
-scaffolded in `.gitlab-ci.yml` — ephemeral Floci, pinned images, no secrets —
-but has **not been run in GitLab**. Local equivalents: `make lint/typecheck`,
-`make test-unit`, `make test-floci/integration/e2e`.
+Pipeline design (`.gitlab-ci.yml` + `docs/CI_CD.md`) was **removed** —
+no CI host is in use yet. Quality is gated locally: `make lint/typecheck`,
+`make test-unit`, `make test-floci/test-integration/test-e2e`,
+`make build-lambdas/build-flink`, and `make smoke`. A CI host can be added
+later (GitHub Actions fits the current remote); `ci/compose.ci.yml` remains
+as the Floci-backed integration environment either way.

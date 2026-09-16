@@ -1,5 +1,5 @@
 # CI compose - Floci-backed integration environment (docker-compose style).
-# Used by the GitLab `integration` and `deploy` stages and local test-integration.
+# Used by local integration tests and any future CI host.
 #
 # Differences vs local docker-compose.yaml:
 #   - FLOCI_STORAGE_MODE=memory (ephemeral per-run)

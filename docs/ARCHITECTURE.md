@@ -73,13 +73,13 @@ flowchart LR
 | Query | Trino + Superset | Windows/CTEs/joins + mature dashboards |
 | ML data | Parquet exports | Prepare training/val splits |
 | IaC | OpenToFu/Terraform | Floci-compatible, portable to AWS |
-| CI/CD | GitLab | Requested |
+| CI/CD | local gates (`make`); CI host deferred | Scratch → local |
 
 ## 5. Runtime Topology
 
 - **Local dev**: `docker compose` — floci, synthea (one-shot), flink,
   trino, superset, mysql (superset meta), nessie (fallback catalog).
-- **CI**: `docker-compose.ci.yml` — same core, Floci storage mode `memory`,
+- **CI-ready**: `ci/compose.ci.yml` — same core, Floci storage mode `memory`,
   no Superset UI (headless asserts), no persistent volumes.
 
 ```mermaid
@@ -91,7 +91,7 @@ flowchart LR
         su["superset"]
         my["mysql"]
     end
-    subgraph CI["GitLab (gitlab runner)"]
+    subgraph CI["CI (ci/compose.ci.yml, local or any runner)"]
         fc["floci/floci (memory)"]
         flc["flink"]
         trc["trino"]
