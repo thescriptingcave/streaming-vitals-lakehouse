@@ -86,7 +86,8 @@ Live HTTP endpoints you can drive from Postman with no extra project:
 `postman/healthcare-vitals-lakehouse.postman_collection.json` is a ready-to-import
 collection (Patients API on Floci, Trino REST, Superset API, and a SigV4
 Kinesis example). Import → run `make seed` → hit the endpoints. Values already
-point at the running local stack.
+point at the running local stack. Full step-by-step walkthrough:
+[docs/POSTMAN.md](docs/POSTMAN.md).
 
 ## CI
 
