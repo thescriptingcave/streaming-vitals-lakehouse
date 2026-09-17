@@ -122,6 +122,7 @@ def main():
                 "database_name": DB_NAME,
                 "sqlalchemy_uri": TRINO_URI,
                 "engine": "trino",
+                "allow_dml": True,
                 "extra": json.dumps({"allows_virtual_table_explore": True}),
                 "expose_in_sqllab": True,
             },
@@ -131,7 +132,12 @@ def main():
         dbid = d["id"]
     else:
         dbid = db["id"]
-    print("database:", dbid)
+    # allow_dml must be True so the workshop bootstrap (DROP/CREATE/INSERT on
+    # the patients dimension, docs/WORKSHOP.md) can run from SQL Lab. Heal any
+    # install that recreated the DB with the read-only default.
+    code, d = call("PUT", f"/api/v1/database/{dbid}", {"allow_dml": True}, token)
+    assert code == 200, (code, d)
+    print("database:", dbid, "(allow_dml: True)")
 
     # --- Dataset ------------------------------------------------------------
     datasets = get_all("/api/v1/dataset", token)
