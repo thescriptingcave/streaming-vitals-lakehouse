@@ -9,7 +9,6 @@ The stack (docs/):
 - **Stream:** synthetic bedside vitals producer → Kinesis — **proven**
 - **Reduce:** Flink SQL — `vitals` event sink + `vitals_1m` (TUMBLE 1m) + `vitals_hop_1m` (HOP 30s/1m) → Iceberg — **proven**
 - **Serve:** Trino (Iceberg, Nessie catalog) + DynamoDB read-model → Lambda API → Superset dashboards — serving proven; the DDB read-model is designed but not wired to Flink
-- **Batch (designed, not yet exercised):** Synthea (real patient cohort, FHIR) → Iceberg via Trino
 - **Operate (designed, not yet exercised):** EventBridge Scheduler → daily L4 maintenance/ML export
 
 ## Quickstart
@@ -29,7 +28,6 @@ make build-flink     # build the Flink JAR (host mvn; dockerized fallback in doc
 docker cp flink/target/vitals-flink-job-1.0.0-SNAPSHOT.jar vitals-flink-jm:/opt/vitals-flink-job.jar
 docker exec vitals-flink-jm flink run -d -c com.healthcare.vitals.VitalsFlinkJob /opt/vitals-flink-job.jar
 make workshop-run    # time-series SQL workshop over the live lake (docs/WORKSHOP.md)
-# Optional batch arm (designed, not yet exercised): make synth && make load
 ```
 
 Then open http://127.0.0.1:8088 (Superset) and `trino --server http://127.0.0.1:8082`
@@ -69,12 +67,11 @@ is selectable but **not yet proven**: Floci lacks Glue `UpdateTable`/`GetPartiti
 ```
 lambdas/  L1 alert SNS · L2 firehose transform · L3 patients API · L4 maintenance
 producer/  vitals generator + Kinesis streamer
-patient_data/ Synthea FHIR mapper + Trino loader
 ml/        patient-based train/val/test split + manifest writer
 flink/     Maven SQL job (VitalsFlinkJob + flink/sql/job.sql) — vitals, vitals_1m, vitals_hop_1m sinks
 infra/     Terraform/OpenToFu -> Floci (9 modules)
 docker/    compose + trino bootstrap + Flink override + vendored Superset dialect patch
-scripts/   build_lambdas, cohort, smoke/deploy, superset provision, seed, diagnostics
+scripts/   build_lambdas, smoke/deploy, superset provision, seed, diagnostics
 sql/       demo + validation + workshop queries (sql/workshop/*)
 tests/     unit (no infra) · integration (Floci) · e2e smoke · fixtures
 ```

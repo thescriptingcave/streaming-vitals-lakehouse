@@ -55,8 +55,9 @@ Policy boundaries: all statements scoped to ARN-prefixed resources
 
 ## 4. Data Handling
 
-- **Synthetic only**. Synthea generator output is fully fabricated; names,
-  dates, locations are not real people. Note this in README/demo materials.
+- **Synthetic only**. All data is generated/fabricated (P-coded demo cohort,
+  simulated vitals); names, dates, locations are not real people. Note this in
+  README/demo materials.
 - No PHI/de-identification step required for generated data; if real data is
   ever ingested, halt and re-architect (out of v1 scope by design).
 - Lake buckets default-blocked (no public/default read). v1 has no external

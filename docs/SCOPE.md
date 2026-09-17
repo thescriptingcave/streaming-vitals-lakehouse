@@ -31,9 +31,8 @@ against the same API surface as production AWS without any cloud spend.
 
 ## 2. Goals
 
-1. A synthetic patient cohort: demographics, encounters, conditions,
-   medications (reusing SKH/Synthea-style generation, aligned with the
-   previous project's patient/encounter/observation schema).
+1. A demo patient dimension (P-coded ids, matching the streamed cohort) to
+   join live vitals against a `patients` table shape.
 2. Live dashboards with freshness in the order of seconds that join live
    vitals to patient profile data.
 3. Time-series analytics: heart-rate trends, sliding windows, lag/lead.
@@ -50,7 +49,7 @@ against the same API surface as production AWS without any cloud spend.
 
 ## 3. Non-Goals (v1)
 
-- Production-grade patient safety / HL7 / FHIR integration.
+- Production-grade patient safety / regulated healthcare data.
 - Authentication beyond dev defaults.
 - Multi-tenant or HIPAA compliance.
 - Deploying to real AWS (Floci only).
@@ -72,10 +71,10 @@ against the same API surface as production AWS without any cloud spend.
 ## 5. Architecture (candidate — decision in §7)
 
 ```
-patient data generator (Python, Synthea-style)      simulated devices (Python)
-  │  demographics / encounters / conditions                │  vitals heartbeats
-  v                                                        v
-  Iceberg lake ──► patients/encounters/...            Kinesis  [Floci]
+demo patient dimension (P-coded, workshop seed)     simulated devices (Python)
+  │  patients only                                   │  vitals heartbeats
+  v                                                   v
+  Iceberg lake ──► patients (demo, small)             Kinesis  [Floci]
   (batch, S3)                                              │
                                                            ├──────────────┐
                                                            v              v
@@ -101,12 +100,11 @@ patient data generator (Python, Synthea-style)      simulated devices (Python)
 ```
 
 ### 5.1 Patient data layer (batch)
-- **Generator**: Python/Synthea-style cohort (~thousands of patients) → the
-  same patient/encounter/observation shape as the prior project, written
-  directly into Iceberg via Trino INSERT/DDL (or Nessie DDL first).
-- **Schema**: patients (id, gender, dob, race, city...), encounters (class,
-  start/end...), conditions, medications — compatible with the previous
-  project so dashboards can be reused.
+- **Source**: a small demo `patients` dimension (P-coded ids P0001–P0004,
+  matching the streamed cohort) created by `sql/workshop/00`. No external
+  patient data is used.
+- **Schema**: patients (id, gender, dob, race, city...), written via Trino
+  INSERT/DDL; join key `patient_id` matches the vitals stream exactly.
 
 ### 5.2 Streaming path
 - **Producer**: Python simulator generating vitals per "bed/device" keyed to
@@ -231,7 +229,6 @@ lint → test (unit) → integration (Floci) → build → deploy(simulated)
 ```
 healthcare-realtime-vitals-lakehouse/
   docs/               # this doc + architecture diagrams
-  patient_data/       # Synthea-style patient/encounter/condition generator
   producer/           # real-time vitals simulator (Python)
   flink/              # Flink SQL jobs + jar
   lambda/             # L1–L4 serverless functions (Python, one dir each)
@@ -274,8 +271,8 @@ healthcare-realtime-vitals-lakehouse/
 - **Trino window/CTE support**: confirmed good; watch Iceberg partition
   pruning for time-range dashboards.
 - **Nessie vs plain Iceberg**: reuse Nessie (as current project) or simplify.
-- **Patient cohort source**: hand-rolled generator (reuse prior project's
-  approach) vs actual Synthea (richer conditions/medications).
+- **Patient dimension**: P-coded demo cohort (workshop `00`); scaling to
+  larger/external cohorts is out of scope.
 - **Vitals↔patients join cardinality**: ensure every streamed patient_id
   exists in the patient layer to avoid dirty joins.
 - **Volume**: how much data is "enough for ML" — target ~5–10M events.
@@ -290,8 +287,8 @@ healthcare-realtime-vitals-lakehouse/
 2. **Catalog**: Iceberg + **Glue Data Catalog (Floci)** — AWS-native; fallback
    Nessie if the Glue/Trino integration proves flaky in M1/M2.
 3. **ML volume (LOCKED)** — 5M floor / 10M target events.
-4. **Patient cohort (LOCKED)** — real **Synthea** (Java-based, FHIR-shaped
-   patients/encounters/conditions/medications/procedures).
+4. **Patient cohort (LOCKED)** — P-coded demo cohort (workshop `00`), matching
+   the streamed `patient_id`s; no external patient data.
 
 Decided (not open): Lambda path = L1–L4 (all four) via Terraform on Floci;
 alerting = Flink rules → DynamoDB → Lambda → SNS (§5.5 L1).

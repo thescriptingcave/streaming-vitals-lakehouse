@@ -28,8 +28,6 @@ Scope: pure logic, mocked AWS/DB boundaries.
 
 - `producer/`: vitals generation (bucketing, boundary HR), retry/backoff
   logic with mocked boto3.
-- `patient_data/`: Synthea→table mapper (id mapping, date coercion,
-  dtype), dedupe/overwrite semantics.
 - `lambda/L1`: decorate DDB Streams event → SNS payload; `sent` dedupe guard;
   region handling; batch partial failure semantics.
 - `lambda/L2`: base64 decode → normalized record / `Dropped` cases;
@@ -65,7 +63,7 @@ window (small) — replay-safe.
 
 `tests/e2e/test_pipeline_smoke.py` (serial, compose up):
 
-1. Load Synthea cohort (small, ~50 pts) → Iceberg.
+1. Bootstrap the demo `patients` dimension (P0001–P0004, `sql/workshop/00`).
 2. Run simulator 60 s (or loop until 500 events) → Kinesis.
 3. Wait: Firehose flushes → L2 → raw S3 → Iceberg raw table.
 4. Assert Trino count over `vitals` reaches expected window.

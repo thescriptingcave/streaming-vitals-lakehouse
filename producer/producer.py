@@ -1,7 +1,7 @@
 """Vitals simulator entry point: stream synthetic readings to Kinesis (Floci).
 
 Mirrors the bedside-device model from the prior project:
-- reads PATIENT_IDS / DEVICE_COUNT from env (real Synthea ids in M1+)
+- reads PATIENT_IDS / DEVICE_COUNT from env (defaults to P-coded placeholder ids)
 - generates one reading per device on a cadence, PutRecords with
   retry/backoff-jitter, drops to a dead-letter log after N attempts.
 
@@ -43,7 +43,7 @@ class ProducerOptions:
 
 
 def load_patient_ids(path: str) -> list[str]:
-    """Read patient ids from a CSV/Synthea export (patient_id column)."""
+    """Read patient ids from a CSV export (patient_id column)."""
     with open(path, newline="", encoding="utf-8") as fh:
         reader = csv.DictReader(fh)
         fieldnames = reader.fieldnames or []
@@ -54,7 +54,7 @@ def load_patient_ids(path: str) -> list[str]:
 def device_fanout(patients: Sequence[str], device_count: int) -> list[str]:
     """Map patients to virtual devices so ids overlap the cohort."""
     if not patients:
-        raise ValueError("no patient ids; generate the Synthea cohort first (make synth)")
+        raise ValueError("no patient ids; pass --patients-csv or rely on P-coded defaults")
     out: list[str] = []
     for idx in range(device_count):
         out.append(patients[idx % len(patients)])

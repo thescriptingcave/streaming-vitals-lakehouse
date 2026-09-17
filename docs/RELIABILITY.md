@@ -27,8 +27,6 @@ Date: 2026-09-15
 - **L4 job**: run date as idempotency key; writes under partition `run_date=
   <date>`; manifest rename is atomic; advisory DDB lock (PK `maintenance-lock`,
   TTL ≥ job expected duration) prevents overlap.
-- **Synthea loader**: staging partition + `INSERT OVERWRITE` semantics by
-  generation batch id.
 
 ## 3. Retries / DLQ Behavior
 
@@ -69,7 +67,7 @@ Date: 2026-09-15
 ## 6. Data Retention
 
 - Iceberg: raw vitals 90 days (snapshot expiry), agg serving 30 days,
-  patient records 1 year (Synthea cohort snapshot). ML feature export kept
+  `patients` demo dimension retained (small). ML feature export kept
   indefinitely (small).
 - DynamoDB: alerts TTL 90 days; latest_vitals no TTL (single row per
   patient, small).

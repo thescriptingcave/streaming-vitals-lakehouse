@@ -30,7 +30,7 @@ Database `healthcare`:
 | Column | Type | Notes |
 |---|---|---|
 | patient_id | varchar | PK, joins vitals |
-| first_name / last_name | varchar | Synthea |
+| first_name / last_name | varchar | demo cohort |
 | gender | varchar | M/F/NB |
 | birth_date | date | |
 | race / ethnicity | varchar | |
@@ -168,7 +168,7 @@ Split by patient prevents leakage; manifest in `s3://healthcare-lake/ml/manifest
 
 - Snake_case columns; Timestamps as `timestamp(3) with time zone` where
   event time is meaningful.
-- Surrogate keys only from Synthea ids (no PII as key material).
+- Surrogate keys only from demo-cohort ids (no PII as key material).
 - Schemas versioned via the Nessie catalog (dev; Glue catalog is the M1 spike
   — see FOCI_VERIFICATION.md); breaking changes = new table version + backfill
   job, never in-place.

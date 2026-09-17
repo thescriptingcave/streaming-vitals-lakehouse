@@ -30,7 +30,7 @@ down: ## Stop all services
 
 down-clean: ## Stop services and remove volumes + local data
 	docker compose down -v --remove-orphans
-	rm -rf data/ synthea-output/ superset_home/ mysql_data/
+	rm -rf data/ superset_home/ mysql_data/
 
 status: ## Show service status
 	docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
@@ -43,12 +43,6 @@ reset: ## Wipe Floci emulated AWS state (buckets, streams, lambdas) and re-apply
 	@echo "Floci restarted with a clean store. Run 'make tf-apply' to re-provision."
 
 # --- data ------------------------------------------------------------------
-synth: ## Run Synthea once -> synthea-output/fhir (requires java)
-	./scripts/generate_cohort.sh
-
-load: ## Load Synthea FHIR cohort into Iceberg via Trino (patient_data loader)
-	$(PYTHON) -m patient_data.synthea_loader
-
 produce: ## Stream vitals from the simulator to Kinesis (Ctrl-C to stop)
 	$(PYTHON) -m producer.producer
 
@@ -85,7 +79,7 @@ test-e2e: ## Full pipeline smoke against a running compose stack
 	$(PYTHON) -m pytest tests/e2e -v -m e2e
 
 coverage: ## Unit coverage with 90% threshold on core modules
-	$(PYTHON) -m pytest tests/unit -m unit --cov=lambdas --cov=producer --cov=patient_data --cov-fail-under=90
+	$(PYTHON) -m pytest tests/unit -m unit --cov=lambdas --cov=producer --cov=ml --cov-fail-under=90
 
 # --- quality ---------------------------------------------------------------
 lint: ## ruff lint

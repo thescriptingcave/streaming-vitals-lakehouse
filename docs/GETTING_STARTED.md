@@ -31,9 +31,8 @@ empty, the job is running but not checkpointing — see FLINK_OPS.md.
 | Docker Desktop (or engine) | runs the whole stack; macOS arm64 expected (Rosetta OK) |
 | git | clone |
 | `uv` (Python 3.12) | Python env for scripts/tests (`make setup` creates `.venv`) |
-| Java 17+ | Synthea cohort generation (`make synth`, optional) |
 | Maven | optional — with host `mvn` use `make build-flink`; otherwise use the dockerized build in docs/FLINK_OPS.md |
-| Ports | 4566 (Floci), 8082/8081 (Trino/JM base), 8088 (Superset); if Docker Desktop squats on 8081/8088, use the Flink override which moves them (see §5) |
+| Ports | 4566 (Floci), 8082/8081 (Trino/JM base), 8088 (Superset); if Docker Desktop squats on 8081/8088, use the Flink override which moves them (see §4) |
 
 ## 2. First boot
 
@@ -66,18 +65,7 @@ Expected: resources appear in Floci (`aws --endpoint-url http://127.0.0.1:4566 k
 shows `vitals`; S3 shows `healthcare-lake`). No real AWS accounts, creds, or billing involved —
 see docs/FLOCI.md for why a URL swap is all that changes for real AWS.
 
-## 4. Batch cohort (optional — you can go straight to §5)
-
-```bash
-make synth       # Synthea: builds and runs the generator (Java), writes synthea-output/fhir
-make load        # FHIR mapper -> Iceberg via Trino (patients/conditions/encounters…)
-make smoke       # end-to-end validation script
-```
-
-`load` lands `patients` (4 in the seed demo, thousands after a full cohort).
-`sql/workshop/00` needs `patients`; if you skip `synth`/`load`, run that first.
-
-## 5. Streaming path — Flink 3-sink job
+## 4. Streaming path — Flink 3-sink job
 
 ```bash
 docker compose -f docker-compose.yaml -f docker/compose.flink.override.yml \
@@ -105,7 +93,7 @@ The windowed tables publish **only on checkpoints** — empty tables mean no
 checkpoints, not no data. Redeploy/cancel/troubleshooting (including the
 `java -jar` trap and the `flink cancel` CLI bug) in docs/FLINK_OPS.md.
 
-## 6. Verify by doing — workshop + dashboard
+## 5. Verify by doing — workshop + dashboard
 
 ```bash
 make workshop-run    # time-series SQL tour over the live lake (docs/WORKSHOP.md)
@@ -117,7 +105,7 @@ Docker Desktop, the override moves it) with `admin/admin`: dashboard "Vitals
 Live" (id 1) plots the windowed aggregates. If using the *base* compose instead
 of the override, these URLs are 8088/8082 instead.
 
-## 7. Day-to-day & teardown
+## 6. Day-to-day & teardown
 
 ```bash
 make status          # health
@@ -132,7 +120,7 @@ make down-clean      # stop + remove volumes (full state wipe)
 
 - `make tf-apply` before `make up` → 0 Lambdas / no stream: bring the stack up
   first (resources are provisioned *into* Floci).
-- Jobs RUNNING but tables empty → checkpoints disabled (see §5); also confirm
+- Jobs RUNNING but tables empty → checkpoints disabled (see §4); also confirm
   the producer is running (a healthy replay shows up from `TRIM_HORIZON` within
   ~30 s thanks to Floci's 24 h retention).
 - Port conflicts on 8081/8088 → add the override (`docker/compose.flink.override.yml`)

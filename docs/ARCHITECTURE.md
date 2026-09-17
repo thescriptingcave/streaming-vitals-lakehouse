@@ -9,9 +9,7 @@ Source of truth: `docs/SCOPE.md` (§5, §12 decisions)
 ```mermaid
 flowchart LR
     subgraph Local["Local dev + CI (Floci emulation)"]
-        SYN["Synthea generator<br/>(Java, batch)"] -->|C4BB/FHIR JSON| LOAD["Patient loader<br/>(batch ingest)"]
-        LOAD --> ICE["Iceberg tables<br/>(S3 via Floci)"]
-        DEV["Vitals simulator<br/>(Python)"] -->|JSON heartbeat| KIN["Kinesis<br/>(Floci)"]
+        DEV["Vitals simulator<br/>(Python, P-coded cohort)"] -->|JSON heartbeat| KIN["Kinesis<br/>(Floci)"]
         KIN --> FH["Firehose"] --> L2["Lambda L2<br/>(transform)"] --> S3L["S3 raw bucket"]
         KIN --> FLINK["Flink SQL job<br/>(Managed Flink / standalone)"]
         FLINK --> DDB["DynamoDB"]
@@ -32,9 +30,7 @@ flowchart LR
 
 | Component | Role | Notes |
 |---|---|---|
-| Synthea generator | Produces realistic FHIR-shaped patient data | Java; batch; ~1–5k patients |
-| Patient loader | Maps Synthea FHIR → patient/encounter/condition/medication tables | Idempotent; staged writes |
-| Vitals simulator | Simulates bedside devices streaming vitals | Python; per-device Hz; keys to patient_id |
+| Vitals simulator | Simulates bedside devices streaming vitals | Python; per-device Hz; keys to patient_id (P-coded demo cohort) |
 | Kinesis (Floci) | Ingestion buffer for vitals | Streams/shard model |
 | Firehose | Optional raw fast-path | Buffered → S3 |
 | Lambda L2 | Firehose transform: normalize vitals JSON | Base64 record handling, batching |
@@ -50,8 +46,9 @@ flowchart LR
 
 ## 3. Data Flow Overview
 
-1. **Batch patient data**: Synthea → loader → Iceberg tables (patients,
-   encounters, conditions, medications) via Glue catalog.
+1. **Streaming vitals**: simulator → Kinesis → Flink SQL → Iceberg tables
+   (`vitals`, `vitals_1m`, `vitals_hop_1m`) via the Nessie catalog; `patients`
+   is a small demo dimension (workshop bootstrap, `sql/workshop/00`).
 2. **Streaming vitals**: simulator → Kinesis. Two consumers:
    - Firehose → L2 transform → S3 → Iceberg raw tables.
    - Flink → windowed aggregates (serving tables) + alert rules → DynamoDB.
@@ -77,7 +74,7 @@ flowchart LR
 
 ## 5. Runtime Topology
 
-- **Local dev**: `docker compose` — floci, synthea (one-shot), flink,
+- **Local dev**: `docker compose` — floci, flink,
   trino, superset, mysql (superset meta), nessie (fallback catalog).
 - **CI-ready**: `ci/compose.ci.yml` — same core, Floci storage mode `memory`,
   no Superset UI (headless asserts), no persistent volumes.
@@ -121,4 +118,4 @@ flowchart LR
 
 - Firehose vs direct Flink raw-write for the historical lake (both in v1?).
 - Serving "latest vitals" via DDB read model refresh vs Trino query.
-- Synthea patient count vs streamed patient_id coverage (see SCOPE §11).
+- Streamed patient_id coverage vs the demo `patients` dimension (see SCOPE §11).

@@ -71,7 +71,6 @@ Enable via `FLOCI_STORAGE_MODE=<mode>`. Dev uses `hybrid`; CI uses `memory`.
 | Service | Image | Notes |
 |---|---|---|
 | `floci` | `floci/floci:latest` | :4566, docker.sock for Lambda |
-| `synthea` | openjdk + synthea jar | one-shot generate → loader |
 | `flink` | `apache/flink` (or Managed Flink via Floci) | jobmanager+taskmanager |
 | `trino` | `trinodb/trino` | iceberg + glue catalogs |
 | `superset` | `apache/superset` | UI + API |

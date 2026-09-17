@@ -1,5 +1,5 @@
 # Healthcare Realtime Vitals Lakehouse - local development stack.
-# Emulated AWS (Floci) + Synthea + Trino + Superset (+ Nessie fallback catalog).
+# Emulated AWS (Floci) + Trino + Superset (+ Nessie fallback catalog).
 #
 #   docker compose up -d --wait
 #   docker compose ps
