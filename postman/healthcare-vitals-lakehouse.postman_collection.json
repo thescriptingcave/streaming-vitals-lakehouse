@@ -1,0 +1,298 @@
+{
+  "info": {
+    "name": "Healthcare Realtime Vitals Lakehouse",
+    "description": "Live HTTP endpoints of the healthcare-realtime-vitals-lakehouse project, running against the Floci AWS emulator. Import this file in Postman (Import > Upload Files). Endpoint defaults below already point at the running local stack.\n\nFolders:\n- Patients API (L3): API Gateway -> Lambda -> DynamoDB on Floci.\n- Trino REST: submit SQL over HTTP (what the trino CLI does).\n- Superset API: login + dashboard reads.\n- AWS via SigV4 (advanced): Floci emulates AWS as plain HTTP; Postman's AWS Signature auth signs requests like boto3 does.\n\nTip: run `make seed` before the latest-vitals requests so seeded readings exist for P0001-P0004.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "patients_api",
+      "value": "http://patients.execute-api.localhost.floci.io:4566",
+      "type": "default"
+    },
+    {
+      "key": "trino_base",
+      "value": "http://127.0.0.1:8083",
+      "type": "default"
+    },
+    {
+      "key": "trino_user",
+      "value": "trino",
+      "type": "default"
+    },
+    {
+      "key": "superset_base",
+      "value": "http://127.0.0.1:18088",
+      "type": "default"
+    },
+    {
+      "key": "floci_endpoint",
+      "value": "http://127.0.0.1:4566",
+      "type": "default"
+    },
+    {
+      "key": "aws_region",
+      "value": "us-east-1",
+      "type": "default"
+    },
+    {
+      "key": "aws_access_key",
+      "value": "test",
+      "type": "default"
+    },
+    {
+      "key": "aws_secret_key",
+      "value": "test",
+      "type": "default"
+    },
+    {
+      "key": "patient_id",
+      "value": "P0001",
+      "type": "default"
+    }
+  ],
+  "item": [
+    {
+      "name": "Patients API (L3) - API Gateway -> Lambda -> DynamoDB on Floci",
+      "item": [
+        {
+          "name": "GET /patients/{id}/alerts",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{patients_api}}/patients/{{patient_id}}/alerts",
+              "host": ["{{patients_api}}"],
+              "path": ["patients", "{{patient_id}}", "alerts"]
+            },
+            "description": "Alerts for a patient from the DynamoDB `alerts` table. Expect 200 with a JSON list (may be empty)."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /patients/{id}/latest-vitals",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{patients_api}}/patients/{{patient_id}}/latest-vitals",
+              "host": ["{{patients_api}}"],
+              "path": ["patients", "{{patient_id}}", "latest-vitals"]
+            },
+            "description": "Latest normalized reading per patient (DynamoDB `latest_vitals`). Needs seeded fixtures: run `make seed`. Without data returns a business 404: {\"error\": \"no latest vitals for P0001\"} - a valid negative test."
+          },
+          "response": []
+        },
+        {
+          "name": "POST /patients/{id}/latest-vitals (negative - method not allowed)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{patients_api}}/patients/{{patient_id}}/latest-vitals",
+              "host": ["{{patients_api}}"],
+              "path": ["patients", "{{patient_id}}", "latest-vitals"]
+            },
+            "description": "Only GET routes exist on this API. Expect HTTP 404 (method not allowed) - exercises route-level behaviour."
+          },
+          "response": []
+        },
+        {
+          "name": "GET /patients/{id} (404 when route/data absent)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{patients_api}}/patients/{{patient_id}}",
+              "host": ["{{patients_api}}"],
+              "path": ["patients", "{{patient_id}}"]
+            },
+            "description": "Expect {\"message\":\"Not Found\"} unless this route is defined in infra/modules/apigateway/main.tf."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Trino REST - SQL over HTTP",
+      "item": [
+        {
+          "name": "POST /v1/statement - count vitals",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Trino-User",
+                "value": "{{trino_user}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "text/plain"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "SELECT count(*) AS vitals_rows FROM iceberg.healthcare.vitals",
+              "options": {
+                "raw": {
+                  "language": "sql"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{trino_base}}/v1/statement",
+              "host": ["{{trino_base}}"],
+              "path": ["v1", "statement"]
+            },
+            "description": "Initiates a Trino query. The response carries columns + a `nextUri` you follow with GET requests to page results - the doc says: loop GET on nextUri (with X-Trino-User) until the request has a `data` array with the answer. Works exactly like the trino CLI under the hood."
+          },
+          "response": []
+        },
+        {
+          "name": "GET {nextUri} - resume/step a query",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Trino-User",
+                "value": "{{trino_user}}"
+              }
+            ],
+            "url": {
+              "raw": "{{next_uri}}",
+              "host": ["{{next_uri}}"]
+            },
+            "description": "After POSTing a statement, copy the returned `nextUri` into the {{next_uri}} variable and GET it to fetch result pages."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Superset API",
+      "item": [
+        {
+          "name": "POST /api/v1/security/login - get access token",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"username\":\"admin\",\"password\":\"admin\",\"provider\":\"db\",\"refresh\":true}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{superset_base}}/api/v1/security/login",
+              "host": ["{{superset_base}}"],
+              "path": ["api", "v1", "security", "login"]
+            },
+            "description": "Returns an access_token. A test script stores it for the requests below.",
+            "event": [
+              {
+                "listen": "test",
+                "script": {
+                  "exec": [
+                    "const json = pm.response.json();",
+                    "if (json.access_token) { pm.collectionVariables.set('superset_token', json.access_token); }"
+                  ],
+                  "type": "text/javascript"
+                }
+              }
+            ]
+          },
+          "response": []
+        },
+        {
+          "name": "GET /api/v1/dashboard/1 - Vitals Live dashboard",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{superset_token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{superset_base}}/api/v1/dashboard/1",
+              "host": ["{{superset_base}}"],
+              "path": ["api", "v1", "dashboard", "1"]
+            },
+            "description": "Metadata for the provisioned 'Vitals Live' dashboard (id 1). Run the login request first."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "AWS via SigV4 (advanced - Floci emulates AWS over plain HTTP)",
+      "item": [
+        {
+          "name": "POST Kinesis.ListStreams (X-Amz-Target signed)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-amz-json-1.1"
+              },
+              {
+                "key": "X-Amz-Target",
+                "value": "Kinesis_20131202.ListStreams"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{floci_endpoint}}",
+              "host": ["{{floci_endpoint}}"],
+              "path": []
+            },
+            "description": "Same wire call boto3 makes. Use Postman's 'AWS Signature' auth preset with {{aws_access_key}}/{{aws_secret_key}}/{{aws_region}} and service `kinesis`, then it returns the real ListStreams JSON. Do this AFTER the login request if you set collection variables from scripts.",
+            "auth": {
+              "type": "awsv4",
+              "awsv4": [
+                {
+                  "key": "accessKey",
+                  "value": "{{aws_access_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "secretKey",
+                  "value": "{{aws_secret_key}}",
+                  "type": "string"
+                },
+                {
+                  "key": "region",
+                  "value": "{{aws_region}}",
+                  "type": "string"
+                },
+                {
+                  "key": "service",
+                  "value": "kinesis",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

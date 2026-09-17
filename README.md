@@ -74,10 +74,19 @@ infra/     Terraform/OpenToFu -> Floci (9 modules)
 docker/    compose + trino bootstrap + Flink override + vendored Superset dialect patch
 scripts/   build_lambdas, smoke/deploy, superset provision, seed, diagnostics
 sql/       demo + validation + workshop queries (sql/workshop/*)
+postman/   ready-to-import collection for API testing (L3, Trino, Superset)
 tests/     unit (no infra) · integration (Floci) · e2e smoke · fixtures
 ```
 
 `make help` lists every target.
+
+## API testing with Postman
+
+Live HTTP endpoints you can drive from Postman with no extra project:
+`postman/healthcare-vitals-lakehouse.postman_collection.json` is a ready-to-import
+collection (Patients API on Floci, Trino REST, Superset API, and a SigV4
+Kinesis example). Import → run `make seed` → hit the endpoints. Values already
+point at the running local stack.
 
 ## CI
 
