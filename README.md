@@ -43,8 +43,9 @@ for `sql/demo_queries.sql`. Both ports shift under the Flink override — see be
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — guided first-run walkthrough
   (prereqs, ordering, expected results, common traps) if the cheatsheet above
   isn't enough.
-- [docs/FLOCI.md](docs/FLOCI.md) — how the Floci emulator works and how to
-  build against it (endpoints, storage modes, per-service behaviour).
+- [docs/FLOCI.md](docs/FLOCI.md) — **beginner's guide** (no AWS/Floci experience
+  needed): what an emulator is, how Floci implements it, first hands-on calls,
+  and how this repo is wired to it.
 - [docs/WORKSHOP.md](docs/WORKSHOP.md) + `sql/workshop/` — runnable time-series
   SQL tour (LAG/LEAD, moving averages, running totals, ranking, CTEs,
   TUMBLE-vs-HOP) against the live lake.
