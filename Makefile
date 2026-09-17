@@ -112,7 +112,7 @@ tf-fmt: ## Format + validate Terraform
 
 # --- superset ----------------------------------------------------------------
 superset-setup: ## Provision Superset DB/datasets/charts/dashboards (REST API)
-	$(PYTHON) scripts/provision_superset.py
+	$(PYTHON) superset/provision_dashboard.py
 
 # --- validation / diagnostics -----------------------------------------------
 validate: ## Run validation queries against Trino

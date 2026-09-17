@@ -79,13 +79,22 @@ def metric(col, agg, label=None):
     }
 
 
-def chart_payload(name, viz_type, dsaid, datasource, params):
+def chart_payload(name, viz_type, dsaid, params):
+    # Canonical chart params: `datasource` must be the string "N__table" (the
+    # shape Explore/echarts expect), not a {"id","type"} dict - a dict stored
+    # in params makes every chart show "Missing parameters" and crashes the
+    # dashboard grid with "Cannot read properties of undefined ('width')".
+    canonical = {
+        "datasource": f"{dsaid}__table",
+        "adhoc_filters": [],
+    }
+    canonical.update(params)
     return {
         "viz_type": viz_type,
         "slice_name": name,
         "datasource_id": dsaid,
         "datasource_type": "table",
-        "params": json.dumps(params),
+        "params": json.dumps(canonical),
     }
 
 
@@ -142,7 +151,6 @@ def main():
     else:
         dsaid = ds["id"]
     print("dataset:", dsaid)
-    datasource = {"id": dsaid, "type": "table"}
 
     # --- Charts -------------------------------------------------------------
     chart_specs = [
@@ -150,9 +158,7 @@ def main():
             "Heart rate trend (avg + max)",
             "echarts_timeseries_line",
             dsaid,
-            datasource,
             {
-                "datasource": datasource,
                 "viz_type": "echarts_timeseries_line",
                 "granularity_sqla": "window_start",
                 "time_grain_sqla": "PT1M",
@@ -172,9 +178,7 @@ def main():
             "Min SpO2 over time",
             "echarts_timeseries_line",
             dsaid,
-            datasource,
             {
-                "datasource": datasource,
                 "viz_type": "echarts_timeseries_line",
                 "granularity_sqla": "window_start",
                 "time_grain_sqla": "PT1M",
@@ -188,17 +192,16 @@ def main():
         ),
         chart_payload(
             "Readings per patient (total)",
-            "echarts_bar",
+            "echarts_timeseries_bar",
             dsaid,
-            datasource,
             {
-                "datasource": datasource,
-                "viz_type": "echarts_bar",
+                "viz_type": "echarts_timeseries_bar",
                 "granularity_sqla": "window_start",
+                "time_grain_sqla": "PT1M",
                 "time_range": "No filter",
                 "metrics": [metric("reading_count", "SUM", "Total readings")],
                 "groupby": ["patient_id"],
-                "x_axis_sort": True,
+                "color_scheme": "SupersetColors",
             },
         ),
     ]
@@ -206,6 +209,19 @@ def main():
     ids = []
     for spec in chart_specs:
         ex = next((c for c in charts if c.get("slice_name") == spec["slice_name"]), None)
+        if ex:
+            try:
+                old_params = json.loads(ex.get("params") or "{}")
+            except Exception:
+                old_params = {}
+            viz_changed = old_params.get("viz_type") != spec["viz_type"]
+            stale = isinstance(old_params.get("datasource"), dict) or viz_changed
+            if stale:
+                code, d = call("DELETE", f"/api/v1/chart/{ex['id']}", None, token)
+                assert code in (200, 204), (code, d)
+                print(f"deleted stale chart {ex['id']} ({spec['slice_name']})")
+                charts = [c for c in charts if c.get("id") != ex["id"]]
+                ex = None
         if ex:
             ids.append(ex["id"])
             continue
@@ -242,25 +258,35 @@ def main():
             "id": "ROOT_ID",
             "children": ["DASHBOARD_GRID_ID"],
             "parents": [],
+            "meta": {"width": 12, "height": 0},
         },
-        "HEADER_ID": {"type": "HEADER", "id": "HEADER_ID", "children": [], "parents": ["ROOT_ID"]},
+        "HEADER_ID": {
+            "type": "HEADER",
+            "id": "HEADER_ID",
+            "children": [],
+            "parents": ["ROOT_ID"],
+            "meta": {"width": 12, "height": 0},
+        },
         "DASHBOARD_GRID_ID": {
             "type": "GRID",
             "id": "DASHBOARD_GRID_ID",
             "children": ["ROW-1", "ROW-2"],
             "parents": ["ROOT_ID"],
+            "meta": {"width": 12, "height": 19},
         },
         "ROW-1": {
             "type": "ROW",
             "id": "ROW-1",
             "children": ["C1", "C2"],
             "parents": ["DASHBOARD_GRID_ID"],
+            "meta": {"width": 12, "height": 11},
         },
         "ROW-2": {
             "type": "ROW",
             "id": "ROW-2",
             "children": ["C3"],
             "parents": ["DASHBOARD_GRID_ID"],
+            "meta": {"width": 12, "height": 8},
         },
     }
     for i, cid in enumerate(ids):
@@ -286,6 +312,11 @@ def main():
         sys.exit("superset.db not found; attach charts via superset UI instead")
     with sqlite3.connect(SUPERSET_DB, timeout=10) as conn:
         cur = conn.cursor()
+        ph = ",".join("?" * len(ids))
+        cur.execute(
+            f"DELETE FROM dashboard_slices WHERE dashboard_id=? AND slice_id NOT IN ({ph})",
+            [dashid] + ids,
+        )
         cur.execute("SELECT slice_id FROM dashboard_slices WHERE dashboard_id=?", (dashid,))
         existing = {row[0] for row in cur.fetchall()}
         for cid in ids:
